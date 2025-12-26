@@ -1,0 +1,715 @@
+import React, { useState, useEffect } from 'react';
+import { Calendar, Clock, Check, ArrowRight, X, ChevronLeft, ChevronRight, Trash2 } from 'lucide-react';
+
+export default function TodoApp() {
+  const [tasks, setTasks] = useState({});
+  const [currentDate, setCurrentDate] = useState(new Date().toDateString());
+  const [newTask, setNewTask] = useState('');
+  const [newTaskTime, setNewTaskTime] = useState('09:00');
+  const [activeTab, setActiveTab] = useState('today');
+  const [showCalendar, setShowCalendar] = useState(false);
+  const [moveTaskId, setMoveTaskId] = useState(null);
+  const [showMoveConfirm, setShowMoveConfirm] = useState(false);
+  const [selectedMoveDate, setSelectedMoveDate] = useState(null);
+  const [calendarDate, setCalendarDate] = useState(new Date());
+  const [isLoading, setIsLoading] = useState(true);
+  const [showExportModal, setShowExportModal] = useState(false);
+  const [exportStartDate, setExportStartDate] = useState(null);
+  const [exportEndDate, setExportEndDate] = useState(null);
+  const [exportCalendarDate, setExportCalendarDate] = useState(new Date());
+
+  // Load tasks from storage on mount
+  useEffect(() => {
+    const loadTasks = async () => {
+      try {
+        const result = await window.storage.get('todo-tasks');
+        if (result && result.value) {
+          setTasks(JSON.parse(result.value));
+        }
+      } catch (error) {
+        console.log('No existing tasks found, starting fresh');
+      } finally {
+        setIsLoading(false);
+      }
+    };
+    loadTasks();
+  }, []);
+
+  // Save tasks to storage whenever they change
+  useEffect(() => {
+    if (!isLoading && Object.keys(tasks).length > 0) {
+      const saveTasks = async () => {
+        try {
+          await window.storage.set('todo-tasks', JSON.stringify(tasks));
+        } catch (error) {
+          console.error('Failed to save tasks:', error);
+        }
+      };
+      saveTasks();
+    }
+  }, [tasks, isLoading]);
+
+  useEffect(() => {
+    tasks[currentDate]?.forEach(task => {
+      if (!task.completed && !task.notificationSet && task.time) {
+        scheduleNotification(task);
+      }
+    });
+  }, [tasks, currentDate]);
+
+  const scheduleNotification = (task) => {
+    const [hours, minutes] = task.time.split(':');
+    const taskDate = new Date(currentDate);
+    taskDate.setHours(parseInt(hours), parseInt(minutes), 0);
+    
+    const now = new Date();
+    const timeUntilNotification = taskDate - now;
+
+    if (timeUntilNotification > 0) {
+      if ('Notification' in window && Notification.permission === 'granted') {
+        setTimeout(() => {
+          new Notification('Task Reminder', {
+            body: `Time for: ${task.text}`,
+            icon: '⏰'
+          });
+        }, timeUntilNotification);
+        
+        setTasks(prev => ({
+          ...prev,
+          [currentDate]: prev[currentDate].map(t => 
+            t.id === task.id ? { ...t, notificationSet: true } : t
+          )
+        }));
+      }
+    }
+  };
+
+  useEffect(() => {
+    if ('Notification' in window && Notification.permission === 'default') {
+      Notification.requestPermission();
+    }
+  }, []);
+
+  const addTask = () => {
+    if (newTask.trim()) {
+      const task = {
+        id: Date.now(),
+        text: newTask,
+        time: newTaskTime,
+        completed: false,
+        notificationSet: false
+      };
+      
+      setTasks(prev => ({
+        ...prev,
+        [currentDate]: [...(prev[currentDate] || []), task]
+      }));
+      
+      setNewTask('');
+      setNewTaskTime('09:00');
+    }
+  };
+
+  const toggleComplete = (id) => {
+    setTasks(prev => ({
+      ...prev,
+      [currentDate]: prev[currentDate].map(task =>
+        task.id === id ? { ...task, completed: !task.completed } : task
+      )
+    }));
+  };
+
+  const deleteTask = (id) => {
+    const taskToDelete = tasks[currentDate].find(t => t.id === id);
+    if (confirm(`Are you sure you want to delete "${taskToDelete.text}"?`)) {
+      setTasks(prev => ({
+        ...prev,
+        [currentDate]: prev[currentDate].filter(task => task.id !== id)
+      }));
+    }
+  };
+
+  const initiateMove = (id) => {
+    setMoveTaskId(id);
+    setShowCalendar(true);
+  };
+
+  const confirmMove = (targetDate) => {
+    setSelectedMoveDate(targetDate);
+    setShowMoveConfirm(true);
+  };
+
+  const executeMove = (confirm) => {
+    if (confirm && moveTaskId && selectedMoveDate) {
+      const taskToMove = tasks[currentDate].find(t => t.id === moveTaskId);
+      
+      setTasks(prev => {
+        const updated = { ...prev };
+        updated[currentDate] = updated[currentDate].filter(t => t.id !== moveTaskId);
+        updated[selectedMoveDate] = [
+          ...(updated[selectedMoveDate] || []),
+          { ...taskToMove, notificationSet: false }
+        ];
+        return updated;
+      });
+    }
+    
+    setShowMoveConfirm(false);
+    setShowCalendar(false);
+    setMoveTaskId(null);
+    setSelectedMoveDate(null);
+  };
+
+  const navigateDate = (direction) => {
+    const current = new Date(currentDate);
+    if (direction === 'yesterday') {
+      current.setDate(current.getDate() - 1);
+    } else if (direction === 'tomorrow') {
+      current.setDate(current.getDate() + 1);
+    }
+    setCurrentDate(current.toDateString());
+    setActiveTab(direction === 'yesterday' ? 'yesterday' : direction === 'tomorrow' ? 'tomorrow' : 'today');
+  };
+
+  const selectCalendarDate = (date) => {
+    if (moveTaskId) {
+      confirmMove(date.toDateString());
+    } else {
+      setCurrentDate(date.toDateString());
+      setShowCalendar(false);
+      setActiveTab('calendar');
+    }
+  };
+
+  const getDaysInMonth = (date) => {
+    const year = date.getFullYear();
+    const month = date.getMonth();
+    const firstDay = new Date(year, month, 1);
+    const lastDay = new Date(year, month + 1, 0);
+    const daysInMonth = lastDay.getDate();
+    const startingDayOfWeek = firstDay.getDay();
+    
+    return { daysInMonth, startingDayOfWeek };
+  };
+
+  const renderCalendar = () => {
+    const { daysInMonth, startingDayOfWeek } = getDaysInMonth(calendarDate);
+    const days = [];
+    
+    for (let i = 0; i < startingDayOfWeek; i++) {
+      days.push(<div key={`empty-${i}`} className="h-10"></div>);
+    }
+    
+    for (let day = 1; day <= daysInMonth; day++) {
+      const date = new Date(calendarDate.getFullYear(), calendarDate.getMonth(), day);
+      const dateString = date.toDateString();
+      const isToday = dateString === new Date().toDateString();
+      const isSelected = dateString === currentDate;
+      
+      days.push(
+        <button
+          key={day}
+          onClick={() => selectCalendarDate(date)}
+          className={`h-10 rounded-lg hover:bg-blue-100 transition ${
+            isToday ? 'bg-blue-500 text-white hover:bg-blue-600' : ''
+          } ${isSelected ? 'ring-2 ring-blue-400' : ''}`}
+        >
+          {day}
+        </button>
+      );
+    }
+    
+    return days;
+  };
+
+  const currentTasks = tasks[currentDate] || [];
+  const today = new Date().toDateString();
+
+  const clearAllData = async () => {
+    if (confirm('Are you sure you want to clear all tasks? This cannot be undone.')) {
+      try {
+        await window.storage.delete('todo-tasks');
+        setTasks({});
+      } catch (error) {
+        console.error('Failed to clear tasks:', error);
+      }
+    }
+  };
+
+  const handleExportDateSelect = (date) => {
+    if (!exportStartDate) {
+      setExportStartDate(date);
+    } else if (!exportEndDate) {
+      if (date >= exportStartDate) {
+        setExportEndDate(date);
+      } else {
+        setExportStartDate(date);
+        setExportEndDate(null);
+      }
+    } else {
+      setExportStartDate(date);
+      setExportEndDate(null);
+    }
+  };
+
+  const getCompletedTasksInRange = () => {
+    if (!exportStartDate || !exportEndDate) return {};
+    
+    const result = {};
+    const current = new Date(exportStartDate);
+    const end = new Date(exportEndDate);
+    
+    while (current <= end) {
+      const dateString = current.toDateString();
+      const dayTasks = tasks[dateString] || [];
+      const completedTasks = dayTasks.filter(task => task.completed);
+      
+      if (completedTasks.length > 0) {
+        result[dateString] = completedTasks;
+      }
+      
+      current.setDate(current.getDate() + 1);
+    }
+    
+    return result;
+  };
+
+  const exportToPDF = () => {
+    const completedTasks = getCompletedTasksInRange();
+    
+    let content = `Completed Tasks Report\n`;
+    content += `Period: ${exportStartDate.toLocaleDateString()} - ${exportEndDate.toLocaleDateString()}\n`;
+    content += `Generated: ${new Date().toLocaleString()}\n\n`;
+    content += `${'='.repeat(60)}\n\n`;
+    
+    Object.keys(completedTasks).sort((a, b) => new Date(a) - new Date(b)).forEach(date => {
+      content += `${new Date(date).toLocaleDateString('en-US', { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric' })}\n`;
+      content += `${'-'.repeat(60)}\n`;
+      
+      completedTasks[date].forEach((task, index) => {
+        content += `${index + 1}. ${task.text}\n`;
+        content += `   Time: ${task.time}\n`;
+      });
+      content += `\n`;
+    });
+    
+    const totalTasks = Object.values(completedTasks).reduce((sum, tasks) => sum + tasks.length, 0);
+    content += `\nTotal Completed Tasks: ${totalTasks}\n`;
+    
+    const blob = new Blob([content], { type: 'text/plain' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `completed-tasks-${exportStartDate.toISOString().split('T')[0]}-to-${exportEndDate.toISOString().split('T')[0]}.txt`;
+    a.click();
+    URL.revokeObjectURL(url);
+    
+    setShowExportModal(false);
+    setExportStartDate(null);
+    setExportEndDate(null);
+  };
+
+  const exportToWord = () => {
+    const completedTasks = getCompletedTasksInRange();
+    
+    let html = `<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <title>Completed Tasks Report</title>
+  <style>
+    body { font-family: Arial, sans-serif; margin: 40px; }
+    h1 { color: #2563eb; border-bottom: 3px solid #2563eb; padding-bottom: 10px; }
+    h2 { color: #1e40af; margin-top: 30px; border-bottom: 1px solid #ddd; padding-bottom: 5px; }
+    .meta { color: #666; font-size: 14px; margin-bottom: 20px; }
+    .task { margin: 15px 0; padding: 10px; background: #f9fafb; border-left: 4px solid #10b981; }
+    .task-title { font-weight: bold; color: #111; }
+    .task-time { color: #666; font-size: 14px; margin-top: 5px; }
+    .summary { margin-top: 30px; padding: 20px; background: #eff6ff; border: 1px solid #2563eb; border-radius: 5px; }
+  </style>
+</head>
+<body>
+  <h1>Completed Tasks Report</h1>
+  <div class="meta">
+    <p><strong>Period:</strong> ${exportStartDate.toLocaleDateString()} - ${exportEndDate.toLocaleDateString()}</p>
+    <p><strong>Generated:</strong> ${new Date().toLocaleString()}</p>
+  </div>
+`;
+    
+    Object.keys(completedTasks).sort((a, b) => new Date(a) - new Date(b)).forEach(date => {
+      html += `  <h2>${new Date(date).toLocaleDateString('en-US', { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric' })}</h2>\n`;
+      
+      completedTasks[date].forEach((task, index) => {
+        html += `  <div class="task">
+    <div class="task-title">${index + 1}. ${task.text}</div>
+    <div class="task-time">⏰ ${task.time}</div>
+  </div>\n`;
+      });
+    });
+    
+    const totalTasks = Object.values(completedTasks).reduce((sum, tasks) => sum + tasks.length, 0);
+    html += `  <div class="summary">
+    <strong>Total Completed Tasks:</strong> ${totalTasks}
+  </div>
+</body>
+</html>`;
+    
+    const blob = new Blob([html], { type: 'application/msword' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `completed-tasks-${exportStartDate.toISOString().split('T')[0]}-to-${exportEndDate.toISOString().split('T')[0]}.doc`;
+    a.click();
+    URL.revokeObjectURL(url);
+    
+    setShowExportModal(false);
+    setExportStartDate(null);
+    setExportEndDate(null);
+  };
+
+  const renderExportCalendar = () => {
+    const { daysInMonth, startingDayOfWeek } = getDaysInMonth(exportCalendarDate);
+    const days = [];
+    
+    for (let i = 0; i < startingDayOfWeek; i++) {
+      days.push(<div key={`empty-${i}`} className="h-10"></div>);
+    }
+    
+    for (let day = 1; day <= daysInMonth; day++) {
+      const date = new Date(exportCalendarDate.getFullYear(), exportCalendarDate.getMonth(), day);
+      const dateString = date.toDateString();
+      const isStartDate = exportStartDate && dateString === exportStartDate.toDateString();
+      const isEndDate = exportEndDate && dateString === exportEndDate.toDateString();
+      const isInRange = exportStartDate && exportEndDate && date >= exportStartDate && date <= exportEndDate;
+      
+      days.push(
+        <button
+          key={day}
+          onClick={() => handleExportDateSelect(date)}
+          className={`h-10 rounded-lg transition ${
+            isStartDate || isEndDate ? 'bg-blue-600 text-white' : 
+            isInRange ? 'bg-blue-200' : 'hover:bg-blue-100'
+          }`}
+        >
+          {day}
+        </button>
+      );
+    }
+    
+    return days;
+  };
+
+  if (isLoading) {
+    return (
+      <div className="min-h-screen bg-gradient-to-br from-blue-50 to-indigo-100 flex items-center justify-center">
+        <div className="text-center">
+          <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-blue-600 mx-auto mb-4"></div>
+          <p className="text-gray-600">Loading your tasks...</p>
+        </div>
+      </div>
+    );
+  }
+
+  return (
+    <div className="min-h-screen bg-gradient-to-br from-blue-50 to-indigo-100 p-6">
+      <div className="max-w-4xl mx-auto">
+        <div className="flex items-center justify-between mb-8">
+          <h1 className="text-4xl font-bold text-gray-800">Daily To-Do List</h1>
+          <div className="flex gap-3">
+            <button
+              onClick={() => setShowExportModal(true)}
+              className="px-4 py-2 bg-green-500 text-white rounded-lg hover:bg-green-600 transition text-sm font-medium"
+            >
+              Export
+            </button>
+            <button
+              onClick={clearAllData}
+              className="px-4 py-2 bg-red-500 text-white rounded-lg hover:bg-red-600 transition text-sm font-medium"
+            >
+              Clear All Data
+            </button>
+          </div>
+        </div>
+        
+        {/* Date Display */}
+        <div className="bg-white rounded-xl shadow-md p-4 mb-6 text-center">
+          <h2 className="text-2xl font-semibold text-gray-700">
+            {currentDate === today ? 'Today' : currentDate}
+          </h2>
+          <p className="text-sm text-gray-500">{new Date(currentDate).toLocaleDateString('en-US', { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric' })}</p>
+        </div>
+
+        {/* Navigation Tabs */}
+        <div className="flex gap-2 mb-6">
+          <button
+            onClick={() => { setCurrentDate(new Date(Date.now() - 86400000).toDateString()); setActiveTab('yesterday'); }}
+            className={`flex-1 py-3 rounded-lg font-medium transition ${
+              activeTab === 'yesterday' ? 'bg-blue-600 text-white' : 'bg-white text-gray-700 hover:bg-gray-50'
+            }`}
+          >
+            Yesterday
+          </button>
+          <button
+            onClick={() => { setCurrentDate(new Date().toDateString()); setActiveTab('today'); }}
+            className={`flex-1 py-3 rounded-lg font-medium transition ${
+              activeTab === 'today' ? 'bg-blue-600 text-white' : 'bg-white text-gray-700 hover:bg-gray-50'
+            }`}
+          >
+            Today
+          </button>
+          <button
+            onClick={() => { setCurrentDate(new Date(Date.now() + 86400000).toDateString()); setActiveTab('tomorrow'); }}
+            className={`flex-1 py-3 rounded-lg font-medium transition ${
+              activeTab === 'tomorrow' ? 'bg-blue-600 text-white' : 'bg-white text-gray-700 hover:bg-gray-50'
+            }`}
+          >
+            Tomorrow
+          </button>
+          <button
+            onClick={() => setShowCalendar(true)}
+            className={`flex-1 py-3 rounded-lg font-medium transition ${
+              activeTab === 'calendar' ? 'bg-blue-600 text-white' : 'bg-white text-gray-700 hover:bg-gray-50'
+            } flex items-center justify-center gap-2`}
+          >
+            <Calendar size={20} />
+            Calendar
+          </button>
+        </div>
+
+        {/* Add Task Section */}
+        <div className="bg-white rounded-xl shadow-md p-6 mb-6">
+          <h3 className="text-lg font-semibold text-gray-700 mb-4">Add New Task</h3>
+          <div className="flex flex-col sm:flex-row gap-3">
+            <input
+              type="text"
+              value={newTask}
+              onChange={(e) => setNewTask(e.target.value)}
+              onKeyPress={(e) => e.key === 'Enter' && addTask()}
+              placeholder="Enter task description..."
+              className="flex-1 px-4 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500"
+            />
+            <div className="flex items-center gap-2 px-4 py-2 border border-gray-300 rounded-lg">
+              <Clock size={18} className="text-gray-500" />
+              <input
+                type="time"
+                value={newTaskTime}
+                onChange={(e) => setNewTaskTime(e.target.value)}
+                className="focus:outline-none"
+              />
+            </div>
+            <button
+              onClick={addTask}
+              className="px-6 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition font-medium"
+            >
+              Add Task
+            </button>
+          </div>
+        </div>
+
+        {/* Tasks List */}
+        <div className="bg-white rounded-xl shadow-md p-6">
+          <h3 className="text-lg font-semibold text-gray-700 mb-4">Tasks</h3>
+          {currentTasks.length === 0 ? (
+            <p className="text-gray-500 text-center py-8">No tasks for this day. Add one above!</p>
+          ) : (
+            <div className="space-y-3">
+              {currentTasks.map(task => (
+                <div
+                  key={task.id}
+                  className={`flex items-center gap-3 p-4 rounded-lg border-2 transition ${
+                    task.completed ? 'bg-green-50 border-green-300' : 'bg-gray-50 border-gray-200'
+                  }`}
+                >
+                  <button
+                    onClick={() => toggleComplete(task.id)}
+                    className={`flex-shrink-0 w-6 h-6 rounded border-2 flex items-center justify-center transition ${
+                      task.completed ? 'bg-green-500 border-green-500' : 'border-gray-400 hover:border-green-500'
+                    }`}
+                  >
+                    {task.completed && <Check size={16} className="text-white" />}
+                  </button>
+                  <div className="flex-1">
+                    <p className={`font-medium ${task.completed ? 'line-through text-gray-500' : 'text-gray-800'}`}>
+                      {task.text}
+                    </p>
+                    <p className="text-sm text-gray-500 flex items-center gap-1 mt-1">
+                      <Clock size={14} />
+                      {task.time}
+                    </p>
+                  </div>
+                  <div className="flex gap-2">
+                    <button
+                      onClick={() => initiateMove(task.id)}
+                      className="p-2 bg-orange-500 text-white rounded-lg hover:bg-orange-600 transition"
+                      title="Move task to another date"
+                    >
+                      <ArrowRight size={18} />
+                    </button>
+                    <button
+                      onClick={() => deleteTask(task.id)}
+                      className="p-2 bg-red-500 text-white rounded-lg hover:bg-red-600 transition"
+                      title="Delete task"
+                    >
+                      <X size={18} />
+                    </button>
+                  </div>
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+      </div>
+
+      {/* Calendar Modal */}
+      {showCalendar && (
+        <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center p-4 z-50">
+          <div className="bg-white rounded-xl shadow-2xl p-6 max-w-md w-full">
+            <div className="flex items-center justify-between mb-4">
+              <button
+                onClick={() => setCalendarDate(new Date(calendarDate.getFullYear(), calendarDate.getMonth() - 1))}
+                className="p-2 hover:bg-gray-100 rounded-lg"
+              >
+                <ChevronLeft size={20} />
+              </button>
+              <h3 className="text-lg font-semibold">
+                {calendarDate.toLocaleDateString('en-US', { month: 'long', year: 'numeric' })}
+              </h3>
+              <button
+                onClick={() => setCalendarDate(new Date(calendarDate.getFullYear(), calendarDate.getMonth() + 1))}
+                className="p-2 hover:bg-gray-100 rounded-lg"
+              >
+                <ChevronRight size={20} />
+              </button>
+            </div>
+            
+            <div className="grid grid-cols-7 gap-2 mb-2">
+              {['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'].map(day => (
+                <div key={day} className="text-center text-sm font-medium text-gray-600">
+                  {day}
+                </div>
+              ))}
+            </div>
+            
+            <div className="grid grid-cols-7 gap-2">
+              {renderCalendar()}
+            </div>
+            
+            <button
+              onClick={() => {
+                setShowCalendar(false);
+                setMoveTaskId(null);
+              }}
+              className="mt-4 w-full py-2 bg-gray-200 text-gray-700 rounded-lg hover:bg-gray-300 transition font-medium"
+            >
+              Close
+            </button>
+          </div>
+        </div>
+      )}
+
+      {/* Move Confirmation Modal */}
+      {showMoveConfirm && (
+        <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center p-4 z-50">
+          <div className="bg-white rounded-xl shadow-2xl p-6 max-w-sm w-full">
+            <h3 className="text-lg font-semibold mb-4">Move Task</h3>
+            <p className="text-gray-700 mb-6">
+              Would you like to move this task to {selectedMoveDate}?
+            </p>
+            <div className="flex gap-3">
+              <button
+                onClick={() => executeMove(true)}
+                className="flex-1 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition font-medium"
+              >
+                Yes
+              </button>
+              <button
+                onClick={() => executeMove(false)}
+                className="flex-1 py-2 bg-gray-200 text-gray-700 rounded-lg hover:bg-gray-300 transition font-medium"
+              >
+                No
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+      
+      {/* Export Modal */}
+      {showExportModal && (
+        <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center p-4 z-50">
+          <div className="bg-white rounded-xl shadow-2xl p-6 max-w-md w-full">
+            <h3 className="text-lg font-semibold mb-4">Export Completed Tasks</h3>
+            <p className="text-sm text-gray-600 mb-4">
+              {!exportStartDate ? 'Select start date' : !exportEndDate ? 'Select end date' : 'Date range selected'}
+            </p>
+            
+            {exportStartDate && exportEndDate && (
+              <div className="mb-4 p-3 bg-blue-50 rounded-lg">
+                <p className="text-sm font-medium text-blue-800">
+                  {exportStartDate.toLocaleDateString()} to {exportEndDate.toLocaleDateString()}
+                </p>
+              </div>
+            )}
+            
+            <div className="flex items-center justify-between mb-4">
+              <button
+                onClick={() => setExportCalendarDate(new Date(exportCalendarDate.getFullYear(), exportCalendarDate.getMonth() - 1))}
+                className="p-2 hover:bg-gray-100 rounded-lg"
+              >
+                <ChevronLeft size={20} />
+              </button>
+              <h3 className="text-lg font-semibold">
+                {exportCalendarDate.toLocaleDateString('en-US', { month: 'long', year: 'numeric' })}
+              </h3>
+              <button
+                onClick={() => setExportCalendarDate(new Date(exportCalendarDate.getFullYear(), exportCalendarDate.getMonth() + 1))}
+                className="p-2 hover:bg-gray-100 rounded-lg"
+              >
+                <ChevronRight size={20} />
+              </button>
+            </div>
+            
+            <div className="grid grid-cols-7 gap-2 mb-2">
+              {['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'].map(day => (
+                <div key={day} className="text-center text-sm font-medium text-gray-600">
+                  {day}
+                </div>
+              ))}
+            </div>
+            
+            <div className="grid grid-cols-7 gap-2 mb-4">
+              {renderExportCalendar()}
+            </div>
+            
+            {exportStartDate && exportEndDate && (
+              <div className="flex gap-3 mb-3">
+                <button
+                  onClick={exportToPDF}
+                  className="flex-1 py-2 bg-red-600 text-white rounded-lg hover:bg-red-700 transition font-medium"
+                >
+                  Export as PDF
+                </button>
+                <button
+                  onClick={exportToWord}
+                  className="flex-1 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition font-medium"
+                >
+                  Export as Word
+                </button>
+              </div>
+            )}
+            
+            <button
+              onClick={() => {
+                setShowExportModal(false);
+                setExportStartDate(null);
+                setExportEndDate(null);
+              }}
+              className="w-full py-2 bg-gray-200 text-gray-700 rounded-lg hover:bg-gray-300 transition font-medium"
+            >
+              Close
+            </button>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
